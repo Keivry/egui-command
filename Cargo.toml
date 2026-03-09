@@ -1,0 +1,9 @@
+[package]
+name = "egui-command"
+version = "0.1.0"
+edition = "2024"
+description = "Pure command model for egui apps — no egui dependency"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+rustc-hash = "2"
