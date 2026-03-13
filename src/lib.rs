@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! `egui-command` — pure command model, no egui dependency.
 //!
 //! Defines the core types for representing user-facing commands:

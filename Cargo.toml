@@ -4,6 +4,8 @@ version = "0.1.1"
 edition = "2024"
 description = "Pure command model for egui apps — no egui dependency"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/Keivry/egui-command"
+homepage = "https://github.com/Keivry/egui-command"
 keywords = ["egui", "command", "command-pattern", "ui", "gui"]
 categories = ["gui", "data-structures"]
 
