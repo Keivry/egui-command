@@ -127,6 +127,146 @@ impl CommandState {
     pub fn is_visible(self) -> bool { self != CommandState::Hidden }
 }
 
+/// Registry that maps command identifiers to their specs and runtime states.
+///
+/// `CommandRegistry<C>` is the single source of truth for all registered
+/// commands in an application.  It stores the human-readable [`CommandSpec`]
+/// and the runtime [`CommandState`] for each command, keyed by
+/// [`CommandId`].
+///
+/// # Type Parameter
+/// `C` is your application's command enum (or any `Copy + Hash + Eq` type
+/// that can be converted into a [`CommandId`] via `Into<CommandId>`).
+///
+/// # Example
+/// ```rust
+/// use egui_command::{CommandId, CommandRegistry, CommandSpec, CommandState};
+///
+/// #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// enum AppCmd {
+///     Save,
+///     Quit,
+/// }
+///
+/// impl From<AppCmd> for CommandId {
+///     fn from(c: AppCmd) -> Self { CommandId::new(c) }
+/// }
+///
+/// let registry = CommandRegistry::new()
+///     .with(
+///         AppCmd::Save,
+///         CommandSpec::new(CommandId::new(AppCmd::Save), "Save"),
+///     )
+///     .with(
+///         AppCmd::Quit,
+///         CommandSpec::new(CommandId::new(AppCmd::Quit), "Quit"),
+///     );
+///
+/// assert!(registry.spec(AppCmd::Save).is_some());
+/// assert_eq!(registry.state(AppCmd::Save), Some(CommandState::Enabled));
+/// ```
+#[derive(Debug, Default)]
+pub struct CommandRegistry<C: Copy + std::hash::Hash + Eq + Into<CommandId>> {
+    specs: std::collections::HashMap<CommandId, CommandSpec>,
+    states: std::collections::HashMap<CommandId, CommandState>,
+    _phantom: std::marker::PhantomData<C>,
+}
+
+impl<C: Copy + std::hash::Hash + Eq + Into<CommandId>> CommandRegistry<C> {
+    /// Create an empty registry.
+    pub fn new() -> Self {
+        Self {
+            specs: std::collections::HashMap::new(),
+            states: std::collections::HashMap::new(),
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
+    /// Register a command with its spec, setting state to
+    /// [`CommandState::Enabled`] if not already present.
+    ///
+    /// Returns `&mut Self` to allow chained `register` calls.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `spec.id != cmd.into()` — i.e. the spec was built for a
+    /// different command than the one being registered.
+    pub fn register(&mut self, cmd: C, spec: CommandSpec) -> &mut Self {
+        let id: CommandId = cmd.into();
+        assert_eq!(
+            spec.id, id,
+            "CommandSpec::id does not match the registered command; \
+             build the spec with CommandId::new(cmd) or CommandSpec::new(id, label)"
+        );
+        self.states.entry(id).or_insert(CommandState::Enabled);
+        self.specs.insert(id, spec);
+        self
+    }
+
+    /// Builder-style registration.  Consumes and returns `Self` so that
+    /// registrations can be chained on construction:
+    ///
+    /// ```rust
+    /// # use egui_command::{CommandId, CommandRegistry, CommandSpec};
+    /// # #[derive(Clone, Copy, Hash, Eq, PartialEq)] enum C { A }
+    /// # impl From<C> for CommandId { fn from(c: C) -> Self { CommandId::new(c) } }
+    /// let reg = CommandRegistry::new().with(C::A, CommandSpec::new(CommandId::new(C::A), "A"));
+    /// ```
+    pub fn with(mut self, cmd: C, spec: CommandSpec) -> Self {
+        self.register(cmd, spec);
+        self
+    }
+
+    /// Look up the [`CommandSpec`] for a command.
+    ///
+    /// Returns `None` if the command was never registered.
+    pub fn spec(&self, cmd: C) -> Option<&CommandSpec> { self.specs.get(&cmd.into()) }
+
+    /// Look up the [`CommandSpec`] by raw [`CommandId`].
+    pub fn spec_by_id(&self, id: CommandId) -> Option<&CommandSpec> { self.specs.get(&id) }
+
+    /// Look up the current [`CommandState`] for a command.
+    ///
+    /// Returns `None` if the command was never registered.
+    pub fn state(&self, cmd: C) -> Option<CommandState> { self.states.get(&cmd.into()).copied() }
+
+    /// Look up the current [`CommandState`] by raw [`CommandId`].
+    pub fn state_by_id(&self, id: CommandId) -> Option<CommandState> {
+        self.states.get(&id).copied()
+    }
+
+    /// Update the runtime state of a registered command.
+    ///
+    /// Has no effect if the command has not been registered.
+    pub fn set_state(&mut self, cmd: C, state: CommandState) {
+        let id: CommandId = cmd.into();
+        if self.specs.contains_key(&id) {
+            self.states.insert(id, state);
+        }
+    }
+
+    /// Update the runtime state by raw [`CommandId`].
+    ///
+    /// Has no effect if the id is not registered.
+    pub fn set_state_by_id(&mut self, id: CommandId, state: CommandState) {
+        if self.specs.contains_key(&id) {
+            self.states.insert(id, state);
+        }
+    }
+
+    /// Iterate over all registered `(CommandId, &CommandSpec)` pairs.
+    pub fn iter_specs(&self) -> impl Iterator<Item = (CommandId, &CommandSpec)> {
+        self.specs.iter().map(|(&id, spec)| (id, spec))
+    }
+
+    /// Mutable look up of a [`CommandSpec`] by raw [`CommandId`].
+    ///
+    /// Returns `None` if the id has not been registered.
+    pub fn spec_by_id_mut(&mut self, id: CommandId) -> Option<&mut CommandSpec> {
+        self.specs.get_mut(&id)
+    }
+}
+
 /// What produced a `CommandTriggered` event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandSource {
@@ -248,5 +388,92 @@ mod tests {
     fn command_source_variants_are_distinct() {
         assert_ne!(CommandSource::Keyboard, CommandSource::Menu);
         assert_ne!(CommandSource::Button, CommandSource::Programmatic);
+    }
+
+    impl From<AppCmd> for CommandId {
+        fn from(c: AppCmd) -> Self { CommandId::new(c) }
+    }
+
+    fn make_spec(cmd: AppCmd, label: &str) -> CommandSpec {
+        CommandSpec::new(CommandId::new(cmd), label)
+    }
+
+    #[test]
+    fn registry_register_and_query_spec() {
+        let mut reg = CommandRegistry::new();
+        reg.register(AppCmd::Save, make_spec(AppCmd::Save, "Save"));
+        assert!(reg.spec(AppCmd::Save).is_some());
+        assert_eq!(reg.spec(AppCmd::Save).unwrap().label, "Save");
+    }
+
+    #[test]
+    fn registry_unregistered_returns_none() {
+        let reg: CommandRegistry<AppCmd> = CommandRegistry::new();
+        assert!(reg.spec(AppCmd::Quit).is_none());
+        assert!(reg.state(AppCmd::Quit).is_none());
+    }
+
+    #[test]
+    fn registry_default_state_is_enabled() {
+        let mut reg = CommandRegistry::new();
+        reg.register(AppCmd::Save, make_spec(AppCmd::Save, "Save"));
+        assert_eq!(reg.state(AppCmd::Save), Some(CommandState::Enabled));
+    }
+
+    #[test]
+    fn registry_set_state_updates_value() {
+        let mut reg = CommandRegistry::new();
+        reg.register(AppCmd::Save, make_spec(AppCmd::Save, "Save"));
+        reg.set_state(AppCmd::Save, CommandState::Disabled);
+        assert_eq!(reg.state(AppCmd::Save), Some(CommandState::Disabled));
+    }
+
+    #[test]
+    fn registry_set_state_unregistered_is_noop() {
+        let mut reg: CommandRegistry<AppCmd> = CommandRegistry::new();
+        reg.set_state(AppCmd::Quit, CommandState::Hidden);
+        assert!(reg.state(AppCmd::Quit).is_none());
+    }
+
+    #[test]
+    fn registry_builder_chain() {
+        let reg = CommandRegistry::new()
+            .with(AppCmd::ShowHelp, make_spec(AppCmd::ShowHelp, "Help"))
+            .with(AppCmd::Save, make_spec(AppCmd::Save, "Save"))
+            .with(AppCmd::Quit, make_spec(AppCmd::Quit, "Quit"));
+        assert!(reg.spec(AppCmd::ShowHelp).is_some());
+        assert!(reg.spec(AppCmd::Save).is_some());
+        assert!(reg.spec(AppCmd::Quit).is_some());
+    }
+
+    #[test]
+    fn registry_register_id_mismatch_panics() {
+        let mut reg = CommandRegistry::new();
+        let wrong_id = CommandId::new(AppCmd::Quit);
+        let spec = CommandSpec::new(wrong_id, "Save");
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            reg.register(AppCmd::Save, spec);
+        }));
+        assert!(result.is_err(), "expected panic on id mismatch");
+    }
+
+    #[test]
+    fn registry_iter_specs_covers_all_registered() {
+        let reg = CommandRegistry::new()
+            .with(AppCmd::Save, make_spec(AppCmd::Save, "Save"))
+            .with(AppCmd::Quit, make_spec(AppCmd::Quit, "Quit"));
+        let ids: Vec<CommandId> = reg.iter_specs().map(|(id, _)| id).collect();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&CommandId::new(AppCmd::Save)));
+        assert!(ids.contains(&CommandId::new(AppCmd::Quit)));
+    }
+
+    #[test]
+    fn registry_spec_by_id() {
+        let mut reg = CommandRegistry::new();
+        reg.register(AppCmd::Save, make_spec(AppCmd::Save, "Save"));
+        let id = CommandId::new(AppCmd::Save);
+        assert!(reg.spec_by_id(id).is_some());
+        assert_eq!(reg.spec_by_id(id).unwrap().label, "Save");
     }
 }
